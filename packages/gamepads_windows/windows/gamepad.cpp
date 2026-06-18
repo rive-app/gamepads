@@ -135,7 +135,7 @@ void Gamepads::init() {
               self->on_gamepad_disconnected(device);
             }
           },
-          this->deviceCallbackToken);
+          &this->deviceCallbackToken);
     }
   }
 }
@@ -144,7 +144,9 @@ void Gamepads::stop() {
   if (g_gamepad)
     g_gamepad->Release();
   if (g_gameInput) {
-    g_gameInput->UnregisterCallback(*this->deviceCallbackToken, 5000);
+    if (this->deviceCallbackToken != 0) {
+      g_gameInput->UnregisterCallback(this->deviceCallbackToken, 5000);
+    }
     g_gameInput->Release();
   }
 
