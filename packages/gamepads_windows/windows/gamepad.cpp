@@ -13,8 +13,9 @@
 
 Gamepads gamepads;
 
+// Created in init() and released in stop(), after every polling thread has been
+// joined — the threads call into it without any further null check.
 static IGameInput* g_gameInput = nullptr;
-static IGameInputDevice* g_gamepad = nullptr;
 
 std::string get_button_name(uint32_t button) {
   switch (button) {
@@ -115,57 +116,95 @@ bool are_states_different(const GameInputGamepadState& a,
 }
 
 void Gamepads::init() {
-  GameInputCreate(&g_gameInput);
-
-  if (g_gameInput != nullptr) {
-    // Register listener for gamepad events
-    if (g_gameInput != nullptr) {
-      g_gameInput->RegisterDeviceCallback(
-          nullptr,  // All devices
-          GameInputKindGamepad, GameInputDeviceConnected,
-          GameInputAsyncEnumeration, static_cast<void*>(this),
-          [](_In_ GameInputCallbackToken callbackToken, _In_ void* context,
-             _In_ IGameInputDevice* device, _In_ uint64_t timestamp,
-             _In_ GameInputDeviceStatus currentStatus,
-             _In_ GameInputDeviceStatus previousStatus) {
-            auto* self = static_cast<Gamepads*>(context);
-            if (currentStatus & GameInputDeviceConnected) {
-              self->on_gamepad_connected(device);
-            } else {
-              self->on_gamepad_disconnected(device);
-            }
-          },
-          &this->deviceCallbackToken);
-    }
+  {
+    std::lock_guard<std::mutex> lock(this->gamepads_mutex);
+    this->stopping = false;
   }
+
+  if (FAILED(GameInputCreate(&g_gameInput)) || g_gameInput == nullptr) {
+    std::cerr << "Failed to initialize GameInput" << std::endl;
+    g_gameInput = nullptr;
+    return;
+  }
+
+  // Register listener for gamepad events. The callback runs on a GameInput
+  // worker thread, so everything it touches has to be thread safe.
+  g_gameInput->RegisterDeviceCallback(
+      nullptr,  // All devices
+      GameInputKindGamepad, GameInputDeviceConnected, GameInputAsyncEnumeration,
+      static_cast<void*>(this),
+      [](_In_ GameInputCallbackToken callbackToken, _In_ void* context,
+         _In_ IGameInputDevice* device, _In_ uint64_t timestamp,
+         _In_ GameInputDeviceStatus currentStatus,
+         _In_ GameInputDeviceStatus previousStatus) {
+        auto* self = static_cast<Gamepads*>(context);
+        if (currentStatus & GameInputDeviceConnected) {
+          self->on_gamepad_connected(device);
+        } else {
+          self->on_gamepad_disconnected(device);
+        }
+      },
+      &this->deviceCallbackToken);
 }
 
 void Gamepads::stop() {
-  if (g_gamepad)
-    g_gamepad->Release();
-  if (g_gameInput) {
-    if (this->deviceCallbackToken != 0) {
-      g_gameInput->UnregisterCallback(this->deviceCallbackToken, 5000);
-    }
-    g_gameInput->Release();
+  // Unregister first, so no new polling thread can be spawned against a device
+  // we are about to release. The timeout makes this wait for any callback that
+  // is already in flight.
+  if (g_gameInput != nullptr && this->deviceCallbackToken != 0) {
+    g_gameInput->UnregisterCallback(this->deviceCallbackToken, 5000);
+    this->deviceCallbackToken = 0;
   }
 
-  // Stop/cleanup threads
-  for (auto gp : this->gamepads) {
-    if (!gp->stop_thread) {
-      if (gp->alive) {
-        gp->stop_thread = true;
-      } else {
-        // Cleanup data of threads that exited due to error state.
-        delete gp;
-      }
-    }
+  std::list<std::unique_ptr<GamepadEntry>> entries;
+  {
+    std::lock_guard<std::mutex> lock(this->gamepads_mutex);
+    // Closes the race against a connect callback that already passed the
+    // unregister but has not taken the lock yet.
+    this->stopping = true;
+    entries.swap(this->gamepads);
   }
-  this->gamepads.clear();
+
+  // Every polling thread has to be joined before g_gameInput is released: each
+  // one calls GetCurrentReading on it, and on its device, every 8ms.
+  for (auto& entry : entries) {
+    shutdown_entry(std::move(entry));
+  }
+  entries.clear();
+
+  if (g_gameInput != nullptr) {
+    g_gameInput->Release();
+    g_gameInput = nullptr;
+  }
+
+  // The emitter closes over the plugin instance that is being torn down. Safe
+  // to drop now that no thread can call it.
+  this->event_emitter.reset();
 }
 
-std::list<GamepadData*> Gamepads::get_gamepads() {
-  return this->gamepads;
+void Gamepads::shutdown_entry(std::unique_ptr<GamepadEntry> entry) {
+  if (entry == nullptr) {
+    return;
+  }
+  entry->stop_thread.store(true, std::memory_order_release);
+  if (entry->thread.joinable()) {
+    entry->thread.join();
+  }
+  if (entry->device != nullptr) {
+    // Balances the AddRef in on_gamepad_connected.
+    entry->device->Release();
+    entry->device = nullptr;
+  }
+  std::cout << "Gamepad thread stopped: " << entry->data.id << std::endl;
+}
+
+std::list<GamepadData> Gamepads::get_gamepads() {
+  std::lock_guard<std::mutex> lock(this->gamepads_mutex);
+  std::list<GamepadData> result;
+  for (const auto& entry : this->gamepads) {
+    result.push_back(entry->data);
+  }
+  return result;
 }
 
 void Gamepads::on_gamepad_connected(IGameInputDevice* device) {
@@ -174,24 +213,37 @@ void Gamepads::on_gamepad_connected(IGameInputDevice* device) {
     std::cerr << "Gamepad connected but failed to read info" << std::endl;
     return;
   }
-  auto gp = new GamepadData();
-  gp->id = AppLocalDeviceIdToString(info->deviceId);
-  gp->name = info->displayName != nullptr && info->displayName->data != nullptr
-                 ? info->displayName->data
-                 : "";
-  gp->num_buttons = info->controllerButtonCount;
-  gp->stop_thread = false;
-  gp->alive = true;
-  gp->vendor_id = static_cast<int>(info->vendorId);
-  gp->product_id = static_cast<int>(info->productId);
-  this->gamepads.push_back(gp);
+  auto entry = std::make_unique<GamepadEntry>();
+  entry->data.id = AppLocalDeviceIdToString(info->deviceId);
+  entry->data.name =
+      info->displayName != nullptr && info->displayName->data != nullptr
+          ? info->displayName->data
+          : "";
+  entry->data.num_buttons = info->controllerButtonCount;
+  entry->data.vendor_id = static_cast<int>(info->vendorId);
+  entry->data.product_id = static_cast<int>(info->productId);
 
-  std::cout << "Gamepad connected: " << gp->id << " : " << gp->name
-            << std::endl;
+  // GameInput owns the device handed to this callback and can destroy it as
+  // soon as the pad disconnects. Take our own reference so the polling thread
+  // cannot outlive it; without this, GetCurrentReading reads freed memory.
+  device->AddRef();
+  entry->device = device;
 
-  std::thread read_thread(
-      [this, gp, device]() { this->read_gamepad(gp, device); });
-  read_thread.detach();
+  std::cout << "Gamepad connected: " << entry->data.id << " : "
+            << entry->data.name << std::endl;
+
+  std::lock_guard<std::mutex> lock(this->gamepads_mutex);
+  if (this->stopping) {
+    // Teardown already collected the entries it will join; starting a thread
+    // now would leave it running past the release of g_gameInput.
+    device->Release();
+    return;
+  }
+  // Published before the thread starts, so stop() is guaranteed to see and join
+  // it. The address is stable across the move into the list.
+  auto* raw = entry.get();
+  this->gamepads.push_back(std::move(entry));
+  raw->thread = std::thread([this, raw]() { this->read_gamepad(raw); });
 }
 
 void Gamepads::on_gamepad_disconnected(IGameInputDevice* device) {
@@ -202,52 +254,49 @@ void Gamepads::on_gamepad_disconnected(IGameInputDevice* device) {
   }
   std::string removeId = AppLocalDeviceIdToString(info->deviceId);
   std::cout << "Gamepad disconnected: " << removeId << std::endl;
-  GamepadData* removeGp = nullptr;
-  for (auto gp : this->gamepads) {
-    if (gp->id == removeId) {
-      gp->stop_thread = true;
-      removeGp = gp;
-      break;
+  std::unique_ptr<GamepadEntry> removed;
+  {
+    std::lock_guard<std::mutex> lock(this->gamepads_mutex);
+    for (auto it = this->gamepads.begin(); it != this->gamepads.end(); ++it) {
+      if ((*it)->data.id == removeId) {
+        removed = std::move(*it);
+        this->gamepads.erase(it);
+        break;
+      }
     }
   }
-  // Remove the gamepad from list. The thread will free up memory.
-  if (removeGp != nullptr) {
-    this->gamepads.remove(removeGp);
-  }
+  // Joined outside the lock: the thread can be mid-emit, and a listGamepads
+  // call must not block behind it.
+  shutdown_entry(std::move(removed));
 }
 
-void Gamepads::read_gamepad(GamepadData* gamepad, IGameInputDevice* device) {
+void Gamepads::read_gamepad(GamepadEntry* entry) {
   GameInputGamepadState previous_state = {
       GameInputGamepadNone, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-  while (!gamepad->stop_thread && g_gameInput != nullptr) {
-    IGameInputReading* reading;
+  while (!entry->stop_thread.load(std::memory_order_acquire)) {
+    IGameInputReading* reading = nullptr;
     GameInputGamepadState state;
-    g_gameInput->GetCurrentReading(GameInputKindGamepad, device, &reading);
-    if (reading != nullptr) {
+    // A failing call can leave `reading` untouched, so it starts null and the
+    // result is checked before anything is dereferenced.
+    if (SUCCEEDED(g_gameInput->GetCurrentReading(GameInputKindGamepad,
+                                                 entry->device, &reading)) &&
+        reading != nullptr) {
       if (reading->GetGamepadState(&state)) {
         if (are_states_different(previous_state, state)) {
           auto events = diff_states(previous_state, state);
-          for (auto event : events) {
+          for (const auto& event : events) {
             if (event_emitter.has_value()) {
-              (*event_emitter)(gamepad, event);
+              (*event_emitter)(&entry->data, event);
             }
           }
         }
         previous_state = state;
-        reading->Release();
       }
+      // Released on every successful read, not just the ones that decoded into
+      // a gamepad state.
+      reading->Release();
     }
 
     Sleep(8);
-  }
-
-  if (gamepad->stop_thread) {
-    std::cout << "Gamepad thread exit (via signal) " << gamepad->id
-              << std::endl;
-    delete gamepad;
-  } else {
-    std::cout << "Gamepad thread exit (due to error state) " << gamepad->id
-              << std::endl;
-    gamepad->alive = false;
   }
 }
