@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:js_interop';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
@@ -94,7 +95,11 @@ class GamepadsWeb extends GamepadsPlatformInterface {
           );
         }
       }
-      for (var i = 0; i < lastState.axesStates.length; i++) {
+      // Devices the browser can't match to the standard mapping report their
+      // raw HID axes, which can be fewer than 4 (buttons-only devices report
+      // none), so never read past what this device actually sent.
+      final axisCount = math.min(lastState.axesStates.length, axes.length);
+      for (var i = 0; i < axisCount; i++) {
         if ((lastState.axesStates[i] - axes[i].toDartDouble).abs() > 0.03) {
           lastState.axesStates[i] = axes[i].toDartDouble;
           emitGamepadEvent(

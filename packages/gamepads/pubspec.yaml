@@ -33,7 +33,11 @@ dependencies:
   gamepads_ios: ^0.1.3+3
   gamepads_linux: ^0.1.2
   gamepads_platform_interface: ^0.1.3
-  gamepads_web: ^0.1.1+1
+  gamepads_web:
+    # Same rationale as `gamepads_windows` below: picks up the local axes
+    # range-check fix instead of the pub.dev version. Restore to
+    # `gamepads_web: ^0.1.1+1` when upstreaming.
+    path: ../gamepads_web
   gamepads_windows:
     # Resolved via relative path within this fork so consumers depending
     # on this `gamepads` via git: source automatically pick up the local

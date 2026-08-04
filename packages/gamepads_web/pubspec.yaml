@@ -1,5 +1,9 @@
 name: gamepads_web
-resolution: workspace
+# resolution: workspace
+# ^ Removed on this fork branch: workspace-resolved packages can't be
+# consumed standalone via git dependency_overrides — pub silently falls
+# back to the pub.dev version. Re-enable if/when merging back to upstream
+# where workspace resolution is the active development model.
 description: Web implementation of gamepads, a Flutter plugin to handle gamepad input across multiple platforms.
 version: 0.1.1+1
 homepage: https://github.com/flame-engine/gamepads
