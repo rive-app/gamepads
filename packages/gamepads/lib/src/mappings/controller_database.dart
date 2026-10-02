@@ -47,6 +47,13 @@ class ControllerMapping {
   /// The value is `true` for X axis, `false` for Y axis.
   final Map<String, bool> dpadAxes;
 
+  /// Maps a hat index (as a string) to the d-pad buttons it drives, keyed
+  /// by the SDL hat bitmask (1 = up, 2 = right, 4 = down, 8 = left).
+  ///
+  /// Used on platforms that report a hat as a single position value
+  /// (Windows) rather than as a pair of axes (Linux, see [dpadAxes]).
+  final Map<String, Map<int, GamepadButton>> dpadHats;
+
   /// Whether the Y-axis values are inverted (negative = up).
   final bool yAxisInverted;
 
@@ -60,10 +67,78 @@ class ControllerMapping {
     required this.buttons,
     required this.axes,
     this.dpadAxes = const {},
+    this.dpadHats = const {},
     this.yAxisInverted = false,
     this.stickRange,
     this.triggerRange,
   });
+
+  /// Normalizes a raw axis value according to [axisMapping].
+  ///
+  /// Sticks normalize to [-1.0, 1.0] and triggers to [0.0, 1.0]. For
+  /// split-axis mappings, values outside the active half normalize to 0.
+  double normalizeAxisValue(AxisMapping axisMapping, double value) {
+    final axis = axisMapping.axis;
+    final isTrigger =
+        axis == GamepadAxis.leftTrigger || axis == GamepadAxis.rightTrigger;
+    final isYAxis =
+        axis == GamepadAxis.leftStickY || axis == GamepadAxis.rightStickY;
+
+    // Handle half-axis modifiers for split axes.
+    switch (axisMapping.half) {
+      case AxisHalf.positive:
+        if (value <= 0) {
+          return 0.0;
+        }
+        // Map positive half [0, max] to [0.0, 1.0].
+        // Use triggerRange for trigger axes, stickRange otherwise.
+        final positiveRange = isTrigger ? triggerRange : stickRange;
+        if (positiveRange != null) {
+          return value / positiveRange.$2;
+        }
+        return value;
+
+      case AxisHalf.negative:
+        if (value >= 0) {
+          return 0.0;
+        }
+        // Map negative half [min, 0] to [0.0, 1.0].
+        // Use triggerRange for trigger axes, stickRange otherwise.
+        final negativeRange = isTrigger ? triggerRange : stickRange;
+        if (negativeRange != null) {
+          return -value / -negativeRange.$1;
+        }
+        return -value;
+
+      case AxisHalf.full:
+        break;
+    }
+
+    if (isTrigger) {
+      final range = triggerRange;
+      if (range != null) {
+        final (min, max) = range;
+        return (value - min) / (max - min);
+      }
+      return value;
+    }
+
+    final range = stickRange;
+    if (range != null) {
+      final (min, max) = range;
+      var normalized = 2.0 * (value - min) / (max - min) - 1.0;
+      if (axisMapping.inverted || (yAxisInverted && isYAxis)) {
+        normalized = -normalized;
+      }
+      return normalized;
+    }
+
+    var result = value;
+    if (axisMapping.inverted || (yAxisInverted && isYAxis)) {
+      result = -result;
+    }
+    return result;
+  }
 }
 
 /// Database of controller mappings, keyed by

@@ -166,6 +166,19 @@ class SdlMappingParser {
       maxRegularAxisIndex: maxRegularAxisIndex,
     );
 
+    // Platforms that report a hat as one position value (Windows) look the
+    // d-pad up by hat index and bitmask instead.
+    final dpadHats = <String, Map<int, GamepadButton>>{};
+    hatDpadEntries.forEach((sdlName, entry) {
+      final button = _sdlButtonNames[sdlName];
+      if (button != null) {
+        dpadHats.putIfAbsent(
+          entry.hatIndex.toString(),
+          () => {},
+        )[entry.hatMask] = button;
+      }
+    });
+
     return SdlParsedMapping(
       guid: guid,
       name: name,
@@ -176,6 +189,7 @@ class SdlMappingParser {
         buttons: buttons,
         axes: axes,
         dpadAxes: dpadAxes,
+        dpadHats: dpadHats,
         yAxisInverted: true,
         stickRange: (-32768, 32767),
         triggerRange: (-32768, 32767),

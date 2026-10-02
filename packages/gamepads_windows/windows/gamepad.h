@@ -1,3 +1,5 @@
+#ifndef FLUTTER_PLUGIN_GAMEPADS_WINDOWS_GAMEPAD_H_
+#define FLUTTER_PLUGIN_GAMEPADS_WINDOWS_GAMEPAD_H_
 
 #include <wtypes.h>
 
@@ -65,6 +67,11 @@ class Gamepads {
   // point after this returns, so handing out pointers would invite a dangling
   // read on the caller's side.
   std::list<GamepadData> get_gamepads();
+  // Whether a connected GameInput gamepad has this vendor/product id. Lets the
+  // raw controller backend skip devices that are already reported from here.
+  bool has_gamepad(int vendor_id, int product_id);
 };
 
 extern Gamepads gamepads;
+
+#endif  // FLUTTER_PLUGIN_GAMEPADS_WINDOWS_GAMEPAD_H_

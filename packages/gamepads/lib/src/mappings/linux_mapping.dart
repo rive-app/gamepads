@@ -1,4 +1,3 @@
-import 'package:gamepads/src/api/gamepad_axis.dart';
 import 'package:gamepads/src/api/gamepad_button.dart';
 import 'package:gamepads/src/gamepad_normalizer.dart';
 import 'package:gamepads/src/mappings/controller_database.dart';
@@ -72,18 +71,13 @@ class LinuxMapping extends PlatformMapping {
       return const [];
     }
 
-    final results = <NormalizedAxis>[];
-    for (final axisMapping in axisMappings) {
-      final normalized = _normalizeValue(
-        axisMapping,
-        value,
-        controllerMapping,
-      );
-      if (normalized != null) {
-        results.add(NormalizedAxis(axisMapping.axis, normalized));
-      }
-    }
-    return results;
+    return [
+      for (final axisMapping in axisMappings)
+        NormalizedAxis(
+          axisMapping.axis,
+          controllerMapping.normalizeAxisValue(axisMapping, value),
+        ),
+    ];
   }
 
   @override
@@ -122,83 +116,6 @@ class LinuxMapping extends PlatformMapping {
         ),
       ];
     }
-  }
-
-  /// Normalizes a raw axis value according to the axis mapping.
-  ///
-  /// Returns `null` if the value is outside the active half for
-  /// split-axis mappings (the axis should emit 0 in that case, but
-  /// this is handled by producing a result for each half separately).
-  double? _normalizeValue(
-    AxisMapping axisMapping,
-    double value,
-    ControllerMapping controllerMapping,
-  ) {
-    final axis = axisMapping.axis;
-    final isTrigger =
-        axis == GamepadAxis.leftTrigger || axis == GamepadAxis.rightTrigger;
-    final isYAxis =
-        axis == GamepadAxis.leftStickY || axis == GamepadAxis.rightStickY;
-
-    // Handle half-axis modifiers for split axes.
-    switch (axisMapping.half) {
-      case AxisHalf.positive:
-        if (value <= 0) {
-          return 0.0;
-        }
-        // Map positive half [0, max] to [0.0, 1.0].
-        // Use triggerRange for trigger axes, stickRange otherwise.
-        final positiveRange = isTrigger
-            ? controllerMapping.triggerRange
-            : controllerMapping.stickRange;
-        if (positiveRange != null) {
-          return value / positiveRange.$2;
-        }
-        return value;
-
-      case AxisHalf.negative:
-        if (value >= 0) {
-          return 0.0;
-        }
-        // Map negative half [min, 0] to [0.0, 1.0].
-        // Use triggerRange for trigger axes, stickRange otherwise.
-        final negativeRange = isTrigger
-            ? controllerMapping.triggerRange
-            : controllerMapping.stickRange;
-        if (negativeRange != null) {
-          return -value / -negativeRange.$1;
-        }
-        return -value;
-
-      case AxisHalf.full:
-        break;
-    }
-
-    if (isTrigger) {
-      final range = controllerMapping.triggerRange;
-      if (range != null) {
-        final (min, max) = range;
-        return (value - min) / (max - min);
-      }
-      return value;
-    }
-
-    final range = controllerMapping.stickRange;
-    if (range != null) {
-      final (min, max) = range;
-      var normalized = 2.0 * (value - min) / (max - min) - 1.0;
-      if (axisMapping.inverted ||
-          (controllerMapping.yAxisInverted && isYAxis)) {
-        normalized = -normalized;
-      }
-      return normalized;
-    }
-
-    var result = value;
-    if (axisMapping.inverted || (controllerMapping.yAxisInverted && isYAxis)) {
-      result = -result;
-    }
-    return result;
   }
 }
 

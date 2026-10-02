@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "gamepad.h"
+#include "raw_gamepads.h"
 
 namespace gamepads_windows {
 
@@ -24,6 +25,8 @@ class GamepadsWindowsPlugin : public flutter::Plugin {
 
  private:
   flutter::PluginRegistrarWindows* registrar;
+  // Controllers GameInput does not classify as a gamepad.
+  RawGamepads raw_gamepads;
   static inline std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       channel{};
 

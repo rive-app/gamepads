@@ -207,6 +207,17 @@ std::list<GamepadData> Gamepads::get_gamepads() {
   return result;
 }
 
+bool Gamepads::has_gamepad(int vendor_id, int product_id) {
+  std::lock_guard<std::mutex> lock(this->gamepads_mutex);
+  for (const auto& entry : this->gamepads) {
+    if (entry->data.vendor_id == vendor_id &&
+        entry->data.product_id == product_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void Gamepads::on_gamepad_connected(IGameInputDevice* device) {
   auto info = device->GetDeviceInfo();
   if (info == nullptr) {

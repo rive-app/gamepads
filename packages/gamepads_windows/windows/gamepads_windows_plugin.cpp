@@ -36,9 +36,17 @@ GamepadsWindowsPlugin::GamepadsWindowsPlugin(
     this->emit_gamepad_event(gamepad, event);
   };
   gamepads.init();
+  raw_gamepads.start(
+      [&](GamepadData* gamepad, const Event& event) {
+        this->emit_gamepad_event(gamepad, event);
+      },
+      [](int vendor_id, int product_id) {
+        return gamepads.has_gamepad(vendor_id, product_id);
+      });
 }
 
 GamepadsWindowsPlugin::~GamepadsWindowsPlugin() {
+  raw_gamepads.stop();
   gamepads.stop();
 }
 
@@ -47,7 +55,9 @@ void GamepadsWindowsPlugin::HandleMethodCall(
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   if (method_call.method_name().compare("listGamepads") == 0) {
     flutter::EncodableList list;
-    for (const auto& gamepad : gamepads.get_gamepads()) {
+    auto connected = gamepads.get_gamepads();
+    connected.splice(connected.end(), raw_gamepads.get_gamepads());
+    for (const auto& gamepad : connected) {
       flutter::EncodableMap map;
       map[flutter::EncodableValue("id")] = flutter::EncodableValue(gamepad.id);
       map[flutter::EncodableValue("name")] =

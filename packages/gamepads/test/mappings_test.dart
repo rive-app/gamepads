@@ -616,5 +616,112 @@ void main() {
         GamepadButton.dpadLeft,
       );
     });
+
+    group('raw controllers', () {
+      // Nintendo Switch Pro Controller, from the bundled SDL database.
+      final switchPro = WindowsMapping().forDevice(
+        vendorId: 0x057e,
+        productId: 0x2009,
+      );
+      // PS5 DualSense, from the bundled SDL database.
+      final dualSense = WindowsMapping().forDevice(
+        vendorId: 0x054c,
+        productId: 0x0ce6,
+      );
+
+      test('maps indexed buttons through the SDL database', () {
+        expect(
+          switchPro.normalizeButton('raw:b0', 1.0)?.button,
+          GamepadButton.a,
+        );
+        expect(
+          switchPro.normalizeButton('raw:b4', 1.0)?.button,
+          GamepadButton.leftBumper,
+        );
+        // The DualSense reports cross on button 1 and square on button 0.
+        expect(
+          dualSense.normalizeButton('raw:b1', 1.0)?.button,
+          GamepadButton.a,
+        );
+        expect(
+          dualSense.normalizeButton('raw:b0', 1.0)?.button,
+          GamepadButton.x,
+        );
+        expect(switchPro.normalizeButton('raw:b0', 0.0)?.value, 0.0);
+      });
+
+      test('normalizes stick axes with up positive', () {
+        final right = switchPro.normalizeAxis('raw:a0', 32767);
+        expect(right.single.axis, GamepadAxis.leftStickX);
+        expect(right.single.value, closeTo(1.0, 0.01));
+
+        // Raw axes report up as the minimum.
+        final up = switchPro.normalizeAxis('raw:a1', -32768);
+        expect(up.single.axis, GamepadAxis.leftStickY);
+        expect(up.single.value, closeTo(1.0, 0.01));
+
+        final center = switchPro.normalizeAxis('raw:a1', 0);
+        expect(center.single.value, closeTo(0.0, 0.01));
+      });
+
+      test('normalizes trigger axes from released to pressed', () {
+        final released = dualSense.normalizeAxis('raw:a3', -32768);
+        expect(released.single.axis, GamepadAxis.leftTrigger);
+        expect(released.single.value, closeTo(0.0, 0.01));
+
+        final pressed = dualSense.normalizeAxis('raw:a3', 32767);
+        expect(pressed.single.value, closeTo(1.0, 0.01));
+      });
+
+      test('turns a hat bitmask into d-pad buttons', () {
+        Map<GamepadButton, double> dpad(double mask) => {
+          for (final result in switchPro.normalizeDpadAxis('raw:h0', mask))
+            result.button: result.value,
+        };
+
+        expect(dpad(1), {
+          GamepadButton.dpadUp: 1.0,
+          GamepadButton.dpadRight: 0.0,
+          GamepadButton.dpadDown: 0.0,
+          GamepadButton.dpadLeft: 0.0,
+        });
+        // Down-left diagonal.
+        expect(dpad(12), {
+          GamepadButton.dpadUp: 0.0,
+          GamepadButton.dpadRight: 0.0,
+          GamepadButton.dpadDown: 1.0,
+          GamepadButton.dpadLeft: 1.0,
+        });
+        // Centred: everything released.
+        expect(dpad(0).values, everyElement(0.0));
+      });
+
+      test('still maps GameInput keys on a device mapping', () {
+        expect(
+          dualSense.normalizeButton('a', 1.0)?.button,
+          GamepadButton.a,
+        );
+        expect(
+          dualSense.normalizeAxis('leftThumbstickX', 1.0).single.value,
+          closeTo(1.0, 0.01),
+        );
+      });
+
+      test('drops raw events from a controller not in the database', () {
+        final unknown = WindowsMapping().forDevice(
+          vendorId: 0xffff,
+          productId: 0xfffe,
+        );
+        expect(unknown.normalizeButton('raw:b0', 1.0), isNull);
+        expect(unknown.normalizeAxis('raw:a0', 0), isEmpty);
+        expect(unknown.normalizeDpadAxis('raw:h0', 1), isEmpty);
+      });
+
+      test('ignores raw keys without device information', () {
+        final mapping = WindowsMapping();
+        expect(mapping.normalizeButton('raw:b0', 1.0), isNull);
+        expect(mapping.normalizeAxis('raw:a0', 0), isEmpty);
+      });
+    });
   });
 }

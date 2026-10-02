@@ -18,6 +18,8 @@ list(APPEND PLUGIN_SOURCES
   "gamepads_windows_plugin.h"
   "gamepad.cpp"
   "gamepad.h"
+  "raw_gamepads.cpp"
+  "raw_gamepads.h"
   "utils.cpp"
   "utils.h"
 )
