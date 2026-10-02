@@ -37,6 +37,12 @@ add_library(${PLUGIN_NAME} SHARED
 # full control over build settings.
 apply_standard_settings(${PLUGIN_NAME})
 
+# raw_gamepads.cpp uses C++/WinRT, whose headers always include a coroutine
+# header. Under C++17 (the standard setting above) that is
+# <experimental/coroutine>, which newer MSVC toolsets reject (STL1011) and
+# Clang does not support. C++20 selects the standard <coroutine> instead.
+target_compile_features(${PLUGIN_NAME} PRIVATE cxx_std_20)
+
 # Symbols are hidden by default to reduce the chance of accidental conflicts
 # between plugins. This should not be removed; any symbols that should be
 # exported should be explicitly exported with the FLUTTER_PLUGIN_EXPORT macro.
